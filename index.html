@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Mesh 加密聊天 & 文件传输 v1.2.0</title>
+  <title>Mesh 加密聊天 & 文件传输 v1.3.0</title>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <style>
     :root {
@@ -264,7 +264,7 @@
     <h1>
       <span>🔐 Mesh 加密聊天</span>
       <span class="badge" id="statusBadge">未连接</span>
-      <span class="badge" style="background:rgba(59,130,246,0.2);color:#93c5fd">v1.2.0</span>
+      <span class="badge" style="background:rgba(59,130,246,0.2);color:#93c5fd">v1.3.0</span>
     </h1>
     <div class="btn-row">
       <button class="secondary" id="toggleSidebar" style="display:none">菜单</button>
@@ -335,6 +335,8 @@
       port: 443,
       path: '/',
       secure: true,
+      // 增加心跳，提高稳定性
+      pingInterval: 3000,
       config: {
         iceServers: [
           // STUN servers
@@ -364,7 +366,7 @@
           }
         ]
       },
-      debug: 1
+      debug: 2
     };
 
     // ==================== 状态 ====================
@@ -572,7 +574,7 @@
     function connectToPeer(targetId) {
       if (connections.has(targetId) || targetId === myId) return;
       log(`正在连接 ${targetId.slice(0,8)}...`);
-      const conn = peer.connect(targetId, { reliable: true, serialization: 'json' });
+      const conn = peer.connect(targetId, { reliable: true });
       setupConnection(conn);
     }
 
@@ -635,8 +637,9 @@
           // Host 等待别人连接
           setConnected(true);
           setButtonsDisabled(false);
-          addSystem(`房间已创建，房间码：${roomId}（请保持页面打开）`);
-          log(`房间 ${roomId} 已就绪，等待其他人加入`);
+          addSystem(`房间已创建，房间码：${roomId}`);
+          addSystem(`请保持此页面打开，把房间码发给对方`);
+          log(`房间 ${roomId} 已就绪，等待其他人加入（请勿刷新或关闭）`);
         }
       });
 
@@ -677,7 +680,7 @@
     }
 
     // 带重试的连接函数（可被取消）
-    function connectToPeerWithRetry(targetId, maxRetries = 3) {
+    function connectToPeerWithRetry(targetId, maxRetries = 5) {
       const currentToken = retryToken; // 捕获当前令牌
       let attempts = 0;
 
@@ -689,7 +692,7 @@
         }
 
         attempts++;
-        log(`正在连接 ${targetId.slice(0,8)}... (第 ${attempts}/${maxRetries} 次)`);
+        log(`正在连接房间 ${targetId}... (第 ${attempts}/${maxRetries} 次)`);
         
         if (!peer || peer.destroyed) {
           setButtonsDisabled(false);
@@ -708,22 +711,23 @@
           return;
         }
 
-        const conn = peer.connect(targetId, { reliable: true, serialization: 'json' });
+        // 使用默认序列化，兼容二进制文件传输
+        const conn = peer.connect(targetId, { reliable: true });
         
         const timeout = setTimeout(() => {
           if (currentToken !== retryToken) return; // 已取消
           if (!conn.open) {
             try { conn.close(); } catch(e) {}
             if (attempts < maxRetries) {
-              log(`连接超时，正在重试...`);
-              setTimeout(tryConnect, 1500);
+              log(`连接超时，${2 + attempts}秒后重试...`);
+              setTimeout(tryConnect, 2000 + attempts * 500);
             } else {
-              toast('连接失败，请确认创建者在线并保持页面打开');
-              log('多次重试后仍无法连接');
+              toast('连接失败。请确认：1.创建者保持页面打开 2.双方关闭VPN 3.网络正常');
+              log('多次重试后仍无法连接，请让创建者重新创建房间');
               setButtonsDisabled(false);
             }
           }
-        }, 6000);
+        }, 8000);
 
         conn.on('open', () => {
           if (currentToken !== retryToken) {
@@ -733,6 +737,7 @@
           clearTimeout(timeout);
           setupConnection(conn);
           setButtonsDisabled(false);
+          log(`成功连接到房间 ${targetId}`);
         });
 
         conn.on('error', (err) => {
@@ -740,15 +745,18 @@
           clearTimeout(timeout);
           console.warn('连接错误', err);
           if (attempts < maxRetries) {
-            setTimeout(tryConnect, 1500);
+            log(`连接失败，准备重试...`);
+            setTimeout(tryConnect, 2000 + attempts * 500);
           } else {
-            toast('连接失败，请确认创建者在线');
+            toast('连接失败。请确认创建者在线并保持页面打开');
             setButtonsDisabled(false);
           }
         });
       }
 
-      tryConnect();
+      // 首次连接延迟 2 秒，给 Host 足够时间在 PeerJS 服务器注册
+      log(`准备连接，等待创建者就绪...`);
+      setTimeout(tryConnect, 2000);
     }
 
     function leaveRoom() {
