@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Mesh 加密聊天 & 文件传输</title>
+  <title>Mesh 加密聊天 & 文件传输 v1.1.0</title>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <style>
     :root {
@@ -264,6 +264,7 @@
     <h1>
       <span>🔐 Mesh 加密聊天</span>
       <span class="badge" id="statusBadge">未连接</span>
+      <span class="badge" style="background:rgba(59,130,246,0.2);color:#93c5fd">v1.1.0</span>
     </h1>
     <div class="btn-row">
       <button class="secondary" id="toggleSidebar" style="display:none">菜单</button>
@@ -575,18 +576,28 @@
     }
 
     // ==================== 房间逻辑 ====================
+    function setButtonsDisabled(disabled) {
+      createBtn.disabled = disabled;
+      joinBtn.disabled = disabled;
+      roomInput.disabled = disabled;
+    }
+
     function createRoom() {
+      if (createBtn.disabled) return;
+      setButtonsDisabled(true);
       roomId = generateRoomId();
       isHost = true;
       startPeer(roomId); // 用房间码作为 host peer id，方便加入
     }
 
     function joinRoom() {
+      if (joinBtn.disabled) return;
       const code = roomInput.value.trim().toUpperCase();
       if (!code || code.length < 4) {
         toast('请输入有效的房间码');
         return;
       }
+      setButtonsDisabled(true);
       roomId = code;
       isHost = false;
       startPeer(); // 随机 id，然后连接 host
@@ -614,11 +625,13 @@
 
         if (!isHost && roomId) {
           // 作为客户端，连接 host（房间码就是 host 的 peer id）
-          connectToPeer(roomId);
+          log(`正在连接房间 ${roomId}...`);
+          connectToPeerWithRetry(roomId, 3);
         } else {
           // Host 等待别人连接
           setConnected(true);
-          addSystem(`房间已创建，房间码：${roomId}`);
+          setButtonsDisabled(false);
+          addSystem(`房间已创建，房间码：${roomId}（请保持页面打开）`);
           log(`房间 ${roomId} 已就绪，等待其他人加入`);
         }
       });
@@ -638,12 +651,16 @@
 
       peer.on('error', (err) => {
         console.error(err);
+        setButtonsDisabled(false);
         if (err.type === 'unavailable-id') {
           toast('房间码已被占用，请换一个或直接加入');
           log('房间码冲突');
         } else if (err.type === 'peer-unavailable') {
-          toast('对方不在线或房间码错误');
+          toast('对方不在线或房间码错误，请确认创建者保持页面打开');
           log('目标不可达');
+        } else if (err.type === 'network') {
+          toast('网络异常，请检查网络后重试');
+          log('网络错误');
         } else {
           log(`错误: ${err.type || err.message}`);
         }
@@ -653,6 +670,56 @@
         log('与信令服务器断开，尝试重连...');
         peer.reconnect();
       });
+    }
+
+    // 带重试的连接函数
+    function connectToPeerWithRetry(targetId, maxRetries = 3) {
+      let attempts = 0;
+
+      function tryConnect() {
+        attempts++;
+        log(`正在连接 ${targetId.slice(0,8)}... (第 ${attempts}/${maxRetries} 次)`);
+        
+        if (connections.has(targetId)) {
+          setButtonsDisabled(false);
+          return;
+        }
+
+        const conn = peer.connect(targetId, { reliable: true, serialization: 'json' });
+        
+        const timeout = setTimeout(() => {
+          if (!conn.open) {
+            try { conn.close(); } catch(e) {}
+            if (attempts < maxRetries) {
+              log(`连接超时，正在重试...`);
+              setTimeout(tryConnect, 1500);
+            } else {
+              toast('连接失败，请确认创建者在线并保持页面打开');
+              log('多次重试后仍无法连接');
+              setButtonsDisabled(false);
+            }
+          }
+        }, 6000);
+
+        conn.on('open', () => {
+          clearTimeout(timeout);
+          setupConnection(conn);
+          setButtonsDisabled(false);
+        });
+
+        conn.on('error', (err) => {
+          clearTimeout(timeout);
+          console.warn('连接错误', err);
+          if (attempts < maxRetries) {
+            setTimeout(tryConnect, 1500);
+          } else {
+            toast('连接失败，请确认创建者在线');
+            setButtonsDisabled(false);
+          }
+        });
+      }
+
+      tryConnect();
     }
 
     function leaveRoom() {
@@ -668,6 +735,7 @@
       roomId = null;
       isHost = false;
       setConnected(false);
+      setButtonsDisabled(false);
       updatePeerList();
       addSystem('你已离开房间');
       log('已离开房间');
