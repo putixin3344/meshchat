@@ -1,0 +1,926 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mesh 加密聊天 & 文件传输</title>
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --border: #334155;
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --success: #22c55e;
+      --danger: #ef4444;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+      --radius: 12px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .header {
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .header h1 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .badge {
+      font-size: 0.75rem;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--border);
+      color: var(--muted);
+    }
+    .badge.online { background: rgba(34,197,94,0.2); color: var(--success); }
+    .container {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      max-width: 1400px;
+      width: 100%;
+      margin: 0 auto;
+      overflow: hidden;
+    }
+    @media (max-width: 800px) {
+      .container { grid-template-columns: 1fr; }
+      .sidebar { display: none; }
+      .sidebar.show { display: block; position: fixed; inset: 0; z-index: 50; background: var(--bg); }
+    }
+    .sidebar {
+      background: var(--card);
+      border-right: 1px solid var(--border);
+      padding: 16px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .section-title {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+    .room-box, .peers-box, .file-box {
+      background: rgba(0,0,0,0.2);
+      border-radius: var(--radius);
+      padding: 12px;
+    }
+    input, button, select {
+      font: inherit;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      padding: 8px 12px;
+    }
+    input:focus, button:focus { outline: 2px solid var(--primary); outline-offset: 1px; }
+    button {
+      cursor: pointer;
+      background: var(--primary);
+      border-color: var(--primary);
+      color: white;
+      font-weight: 500;
+      transition: background 0.15s;
+    }
+    button:hover { background: var(--primary-hover); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.secondary { background: transparent; color: var(--text); }
+    button.secondary:hover { background: var(--border); }
+    button.danger { background: var(--danger); border-color: var(--danger); }
+    .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .btn-row button { flex: 1; min-width: 80px; }
+    .peer-list { list-style: none; }
+    .peer-list li {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 0;
+      font-size: 0.9rem;
+    }
+    .peer-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+    }
+    .main {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      min-height: 0;
+    }
+    .chat-area {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .msg {
+      max-width: 75%;
+      padding: 10px 14px;
+      border-radius: 16px;
+      line-height: 1.4;
+      word-break: break-word;
+      position: relative;
+    }
+    .msg.me {
+      align-self: flex-end;
+      background: var(--primary);
+      border-bottom-right-radius: 4px;
+    }
+    .msg.other {
+      align-self: flex-start;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-bottom-left-radius: 4px;
+    }
+    .msg .meta {
+      font-size: 0.7rem;
+      opacity: 0.7;
+      margin-bottom: 2px;
+    }
+    .msg.system {
+      align-self: center;
+      background: transparent;
+      color: var(--muted);
+      font-size: 0.85rem;
+      max-width: 90%;
+      text-align: center;
+    }
+    .msg.file {
+      background: var(--card);
+      border: 1px solid var(--border);
+    }
+    .file-info {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .file-icon {
+      width: 40px; height: 40px;
+      background: var(--border);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.2rem;
+    }
+    .progress {
+      height: 6px;
+      background: var(--border);
+      border-radius: 3px;
+      overflow: hidden;
+      margin-top: 6px;
+    }
+    .progress-bar {
+      height: 100%;
+      background: var(--success);
+      transition: width 0.2s;
+    }
+    .input-bar {
+      border-top: 1px solid var(--border);
+      padding: 12px 16px;
+      background: var(--card);
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+    }
+    .input-bar textarea {
+      flex: 1;
+      resize: none;
+      min-height: 40px;
+      max-height: 120px;
+      border-radius: 20px;
+      padding: 10px 16px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font: inherit;
+    }
+    .input-bar button { border-radius: 50%; width: 42px; height: 42px; padding: 0; display: flex; align-items: center; justify-content: center; }
+    .status-bar {
+      font-size: 0.8rem;
+      color: var(--muted);
+      padding: 6px 16px;
+      background: rgba(0,0,0,0.3);
+      border-top: 1px solid var(--border);
+    }
+    .hidden { display: none !important; }
+    .copy-btn { font-size: 0.8rem; padding: 4px 8px; }
+    #roomIdDisplay { font-family: monospace; font-size: 1.1rem; letter-spacing: 1px; }
+    .drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      text-align: center;
+      color: var(--muted);
+      transition: border-color 0.2s, background 0.2s;
+      cursor: pointer;
+    }
+    .drop-zone.dragover {
+      border-color: var(--primary);
+      background: rgba(59,130,246,0.1);
+    }
+    .toast {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--card);
+      border: 1px solid var(--border);
+      padding: 10px 20px;
+      border-radius: 8px;
+      z-index: 100;
+      animation: fadeIn 0.3s;
+    }
+    @keyframes fadeIn { from { opacity: 0; transform: translateX(-50%) translateY(10px); } }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>
+      <span>🔐 Mesh 加密聊天</span>
+      <span class="badge" id="statusBadge">未连接</span>
+    </h1>
+    <div class="btn-row">
+      <button class="secondary" id="toggleSidebar" style="display:none">菜单</button>
+      <button class="secondary" id="leaveBtn" disabled>离开房间</button>
+    </div>
+  </div>
+
+  <div class="container">
+    <aside class="sidebar" id="sidebar">
+      <div class="room-box">
+        <div class="section-title">房间</div>
+        <div id="joinPanel">
+          <input type="text" id="roomInput" placeholder="输入 6 位房间码" maxlength="8" style="width:100%;margin-bottom:8px">
+          <div class="btn-row">
+            <button id="createBtn">创建房间</button>
+            <button id="joinBtn" class="secondary">加入</button>
+          </div>
+        </div>
+        <div id="roomPanel" class="hidden">
+          <div style="margin-bottom:8px">房间码：<strong id="roomIdDisplay"></strong>
+            <button class="copy-btn secondary" id="copyRoomBtn">复制</button>
+          </div>
+          <div style="font-size:0.85rem;color:var(--muted)">把房间码发给对方即可加入（支持多人）</div>
+        </div>
+      </div>
+
+      <div class="peers-box">
+        <div class="section-title">在线节点 (<span id="peerCount">0</span>)</div>
+        <ul class="peer-list" id="peerList">
+          <li style="color:var(--muted)">暂无连接</li>
+        </ul>
+      </div>
+
+      <div class="file-box">
+        <div class="section-title">发送文件</div>
+        <div class="drop-zone" id="dropZone">
+          拖拽文件到这里<br>或点击选择
+          <input type="file" id="fileInput" multiple class="hidden">
+        </div>
+        <div id="transferList" style="margin-top:10px;font-size:0.85rem"></div>
+      </div>
+
+      <div style="font-size:0.75rem;color:var(--muted);margin-top:auto">
+        <p>✅ 端到端加密（WebRTC DTLS）</p>
+        <p>✅ 点对点直连 · Mesh 组网</p>
+        <p>✅ 分块高速传输 + 校验</p>
+        <p style="margin-top:6px">服务器仅做信令，不经手任何数据</p>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="chat-area" id="chatArea">
+        <div class="msg system">欢迎使用 Mesh 加密聊天与文件传输<br>创建或加入房间后即可开始</div>
+      </div>
+      <div class="input-bar">
+        <textarea id="msgInput" placeholder="输入消息，Enter 发送，Shift+Enter 换行" rows="1" disabled></textarea>
+        <button id="sendBtn" disabled title="发送">➤</button>
+      </div>
+      <div class="status-bar" id="statusBar">就绪 · 等待创建/加入房间</div>
+    </main>
+  </div>
+
+  <script>
+    // ==================== 配置 ====================
+    const CHUNK_SIZE = 64 * 1024; // 64KB，兼顾速度与稳定性
+    const PEER_CONFIG = {
+      host: '0.peerjs.com',
+      port: 443,
+      path: '/',
+      secure: true,
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun.cloudflare.com:3478' }
+        ]
+      },
+      debug: 1
+    };
+
+    // ==================== 状态 ====================
+    let peer = null;
+    let myId = null;
+    let roomId = null;
+    let isHost = false;
+    const connections = new Map(); // peerId -> DataConnection
+    const peerNames = new Map();   // peerId -> display name
+    let myName = '用户' + Math.floor(Math.random() * 9000 + 1000);
+
+    // 文件传输状态
+    const outgoing = new Map(); // fileId -> {file, chunks, sent, peers}
+    const incoming = new Map(); // fileId -> {name, size, chunks, received, hash}
+
+    // ==================== DOM ====================
+    const $ = id => document.getElementById(id);
+    const statusBadge = $('statusBadge');
+    const statusBar = $('statusBar');
+    const chatArea = $('chatArea');
+    const msgInput = $('msgInput');
+    const sendBtn = $('sendBtn');
+    const roomInput = $('roomInput');
+    const createBtn = $('createBtn');
+    const joinBtn = $('joinBtn');
+    const leaveBtn = $('leaveBtn');
+    const roomPanel = $('roomPanel');
+    const joinPanel = $('joinPanel');
+    const roomIdDisplay = $('roomIdDisplay');
+    const peerList = $('peerList');
+    const peerCount = $('peerCount');
+    const fileInput = $('fileInput');
+    const dropZone = $('dropZone');
+    const transferList = $('transferList');
+
+    // ==================== 工具函数 ====================
+    function log(msg, type = 'info') {
+      console.log(`[${type}]`, msg);
+      statusBar.textContent = msg;
+    }
+
+    function toast(text) {
+      const el = document.createElement('div');
+      el.className = 'toast';
+      el.textContent = text;
+      document.body.appendChild(el);
+      setTimeout(() => el.remove(), 2500);
+    }
+
+    function addSystem(text) {
+      const div = document.createElement('div');
+      div.className = 'msg system';
+      div.textContent = text;
+      chatArea.appendChild(div);
+      chatArea.scrollTop = chatArea.scrollHeight;
+    }
+
+    function addChat(from, text, isMe = false) {
+      const div = document.createElement('div');
+      div.className = 'msg ' + (isMe ? 'me' : 'other');
+      div.innerHTML = `<div class="meta">${escapeHtml(from)} · ${new Date().toLocaleTimeString()}</div>${escapeHtml(text)}`;
+      chatArea.appendChild(div);
+      chatArea.scrollTop = chatArea.scrollHeight;
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function generateRoomId() {
+      return Math.random().toString(36).substring(2, 8).toUpperCase();
+    }
+
+    async function sha256(buffer) {
+      const hash = await crypto.subtle.digest('SHA-256', buffer);
+      return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2,'0')).join('');
+    }
+
+    // ==================== Peer 管理 ====================
+    function updatePeerList() {
+      peerCount.textContent = connections.size;
+      if (connections.size === 0) {
+        peerList.innerHTML = '<li style="color:var(--muted)">暂无连接</li>';
+        return;
+      }
+      peerList.innerHTML = '';
+      for (const [id, conn] of connections) {
+        const li = document.createElement('li');
+        const name = peerNames.get(id) || id.slice(0,8);
+        li.innerHTML = `<span class="peer-dot"></span> ${escapeHtml(name)} <span style="color:var(--muted);font-size:0.75rem">(${id.slice(0,6)})</span>`;
+        peerList.appendChild(li);
+      }
+    }
+
+    function setConnected(connected) {
+      statusBadge.textContent = connected ? '已连接' : '未连接';
+      statusBadge.className = 'badge' + (connected ? ' online' : '');
+      msgInput.disabled = !connected;
+      sendBtn.disabled = !connected;
+      leaveBtn.disabled = !connected;
+      if (connected) {
+        joinPanel.classList.add('hidden');
+        roomPanel.classList.remove('hidden');
+      } else {
+        joinPanel.classList.remove('hidden');
+        roomPanel.classList.add('hidden');
+      }
+    }
+
+    function broadcast(data, excludeId = null) {
+      const msg = typeof data === 'string' ? data : JSON.stringify(data);
+      for (const [id, conn] of connections) {
+        if (id !== excludeId && conn.open) {
+          try { conn.send(msg); } catch(e) { console.warn('send fail', id, e); }
+        }
+      }
+    }
+
+    function setupConnection(conn) {
+      const peerId = conn.peer;
+      connections.set(peerId, conn);
+
+      conn.on('open', () => {
+        log(`已与 ${peerId.slice(0,8)} 建立连接`);
+        // 发送自己的名字和已有 peer 列表（用于 mesh）
+        conn.send(JSON.stringify({
+          type: 'hello',
+          name: myName,
+          peers: Array.from(connections.keys()).filter(id => id !== peerId)
+        }));
+        updatePeerList();
+        addSystem(`${peerNames.get(peerId) || peerId.slice(0,8)} 已加入`);
+        setConnected(true);
+      });
+
+      conn.on('data', async (raw) => {
+        let data;
+        try {
+          data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        } catch {
+          // 可能是二进制 chunk
+          handleBinary(raw, peerId);
+          return;
+        }
+
+        switch (data.type) {
+          case 'hello':
+            peerNames.set(peerId, data.name || peerId.slice(0,8));
+            updatePeerList();
+            // Mesh: 主动连接对方提供的其他 peers
+            if (data.peers && Array.isArray(data.peers)) {
+              for (const otherId of data.peers) {
+                if (!connections.has(otherId) && otherId !== myId) {
+                  connectToPeer(otherId);
+                }
+              }
+            }
+            break;
+
+          case 'chat':
+            addChat(data.from || peerNames.get(peerId) || peerId.slice(0,8), data.text, false);
+            // 转发实现简单 mesh 广播（避免环，实际靠直连）
+            break;
+
+          case 'file-meta':
+            handleFileMeta(data, peerId);
+            break;
+
+          case 'file-chunk':
+            // JSON 方式的小文件或控制，大文件用 binary
+            break;
+
+          case 'file-done':
+            await finalizeFile(data.fileId, peerId);
+            break;
+
+          case 'peer-list':
+            if (data.peers) {
+              for (const p of data.peers) {
+                if (!connections.has(p) && p !== myId) connectToPeer(p);
+              }
+            }
+            break;
+        }
+      });
+
+      conn.on('close', () => {
+        connections.delete(peerId);
+        peerNames.delete(peerId);
+        updatePeerList();
+        addSystem(`${peerId.slice(0,8)} 已离开`);
+        if (connections.size === 0) {
+          setConnected(false);
+          log('所有连接已断开');
+        }
+      });
+
+      conn.on('error', (err) => {
+        console.error('Connection error', peerId, err);
+        log(`连接错误: ${err.type || err.message}`);
+      });
+    }
+
+    function connectToPeer(targetId) {
+      if (connections.has(targetId) || targetId === myId) return;
+      log(`正在连接 ${targetId.slice(0,8)}...`);
+      const conn = peer.connect(targetId, { reliable: true, serialization: 'json' });
+      setupConnection(conn);
+    }
+
+    // ==================== 房间逻辑 ====================
+    function createRoom() {
+      roomId = generateRoomId();
+      isHost = true;
+      startPeer(roomId); // 用房间码作为 host peer id，方便加入
+    }
+
+    function joinRoom() {
+      const code = roomInput.value.trim().toUpperCase();
+      if (!code || code.length < 4) {
+        toast('请输入有效的房间码');
+        return;
+      }
+      roomId = code;
+      isHost = false;
+      startPeer(); // 随机 id，然后连接 host
+    }
+
+    function startPeer(forcedId = null) {
+      if (peer) {
+        peer.destroy();
+        peer = null;
+      }
+      connections.clear();
+      peerNames.clear();
+      updatePeerList();
+
+      const opts = { ...PEER_CONFIG };
+      if (forcedId) opts.id = forcedId;
+
+      peer = new Peer(opts);
+
+      peer.on('open', (id) => {
+        myId = id;
+        roomIdDisplay.textContent = roomId || id;
+        log(`我的 ID: ${id.slice(0,12)}...`);
+        setConnected(false);
+
+        if (!isHost && roomId) {
+          // 作为客户端，连接 host（房间码就是 host 的 peer id）
+          connectToPeer(roomId);
+        } else {
+          // Host 等待别人连接
+          setConnected(true);
+          addSystem(`房间已创建，房间码：${roomId}`);
+          log(`房间 ${roomId} 已就绪，等待其他人加入`);
+        }
+      });
+
+      peer.on('connection', (conn) => {
+        setupConnection(conn);
+        // Host 把当前所有 peer 列表发给新人，实现 mesh
+        setTimeout(() => {
+          if (conn.open) {
+            conn.send(JSON.stringify({
+              type: 'peer-list',
+              peers: Array.from(connections.keys())
+            }));
+          }
+        }, 500);
+      });
+
+      peer.on('error', (err) => {
+        console.error(err);
+        if (err.type === 'unavailable-id') {
+          toast('房间码已被占用，请换一个或直接加入');
+          log('房间码冲突');
+        } else if (err.type === 'peer-unavailable') {
+          toast('对方不在线或房间码错误');
+          log('目标不可达');
+        } else {
+          log(`错误: ${err.type || err.message}`);
+        }
+      });
+
+      peer.on('disconnected', () => {
+        log('与信令服务器断开，尝试重连...');
+        peer.reconnect();
+      });
+    }
+
+    function leaveRoom() {
+      for (const conn of connections.values()) {
+        try { conn.close(); } catch {}
+      }
+      connections.clear();
+      if (peer) {
+        peer.destroy();
+        peer = null;
+      }
+      myId = null;
+      roomId = null;
+      isHost = false;
+      setConnected(false);
+      updatePeerList();
+      addSystem('你已离开房间');
+      log('已离开房间');
+      chatArea.innerHTML = '<div class="msg system">已离开房间，可重新创建或加入</div>';
+    }
+
+    // ==================== 聊天 ====================
+    function sendMessage() {
+      const text = msgInput.value.trim();
+      if (!text || connections.size === 0) return;
+      const payload = { type: 'chat', from: myName, text };
+      broadcast(payload);
+      addChat(myName, text, true);
+      msgInput.value = '';
+      msgInput.style.height = 'auto';
+    }
+
+    // ==================== 文件传输 ====================
+    function handleFiles(files) {
+      if (!files || files.length === 0 || connections.size === 0) {
+        toast('请先连接至少一个节点');
+        return;
+      }
+      for (const file of files) {
+        sendFile(file);
+      }
+    }
+
+    async function sendFile(file) {
+      const fileId = crypto.randomUUID();
+      const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+
+      // 先算 hash（可选，大文件可跳过以加速）
+      let fileHash = '';
+      if (file.size < 50 * 1024 * 1024) { // 50MB 以下算 hash
+        const buf = await file.arrayBuffer();
+        fileHash = await sha256(buf);
+      }
+
+      const meta = {
+        type: 'file-meta',
+        fileId,
+        name: file.name,
+        size: file.size,
+        type: file.type || 'application/octet-stream',
+        totalChunks,
+        hash: fileHash,
+        from: myName
+      };
+
+      broadcast(meta);
+
+      // 显示本地进度
+      const transferEl = document.createElement('div');
+      transferEl.id = `tx-${fileId}`;
+      transferEl.innerHTML = `
+        <div style="margin-bottom:4px">发送: ${escapeHtml(file.name)} (${formatSize(file.size)})</div>
+        <div class="progress"><div class="progress-bar" id="bar-${fileId}" style="width:0%"></div></div>
+      `;
+      transferList.prepend(transferEl);
+
+      // 分块发送给所有已连接 peer
+      let sentChunks = 0;
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        const chunk = file.slice(start, end);
+        const buffer = await chunk.arrayBuffer();
+
+        // 使用 binary 发送以获得更高速度
+        const header = new TextEncoder().encode(JSON.stringify({
+          t: 'c', // chunk
+          f: fileId,
+          i: i
+        }) + '\n');
+        const payload = new Uint8Array(header.length + buffer.byteLength);
+        payload.set(header, 0);
+        payload.set(new Uint8Array(buffer), header.length);
+
+        for (const conn of connections.values()) {
+          if (conn.open) {
+            try {
+              // PeerJS 支持直接发 ArrayBuffer
+              conn.send(payload.buffer);
+            } catch (e) {
+              console.warn('chunk send error', e);
+            }
+          }
+        }
+
+        sentChunks++;
+        const pct = Math.round((sentChunks / totalChunks) * 100);
+        const bar = document.getElementById(`bar-${fileId}`);
+        if (bar) bar.style.width = pct + '%';
+      }
+
+      // 通知完成
+      broadcast({ type: 'file-done', fileId, hash: fileHash });
+      addSystem(`文件已发送: ${file.name}`);
+      setTimeout(() => {
+        const el = document.getElementById(`tx-${fileId}`);
+        if (el) el.remove();
+      }, 3000);
+    }
+
+    function handleBinary(raw, fromId) {
+      // 解析 header + binary
+      const bytes = new Uint8Array(raw);
+      let headerEnd = -1;
+      for (let i = 0; i < Math.min(bytes.length, 512); i++) {
+        if (bytes[i] === 10) { // \n
+          headerEnd = i;
+          break;
+        }
+      }
+      if (headerEnd === -1) return;
+
+      try {
+        const headerStr = new TextDecoder().decode(bytes.slice(0, headerEnd));
+        const header = JSON.parse(headerStr);
+        if (header.t === 'c') {
+          const chunkData = bytes.slice(headerEnd + 1);
+          receiveChunk(header.f, header.i, chunkData, fromId);
+        }
+      } catch (e) {
+        console.warn('binary parse error', e);
+      }
+    }
+
+    function handleFileMeta(meta, fromId) {
+      const { fileId, name, size, totalChunks, hash, from } = meta;
+      incoming.set(fileId, {
+        name,
+        size,
+        totalChunks,
+        hash,
+        from: from || peerNames.get(fromId) || fromId.slice(0,8),
+        chunks: new Map(),
+        received: 0
+      });
+
+      // UI
+      const div = document.createElement('div');
+      div.className = 'msg file other';
+      div.id = `rx-${fileId}`;
+      div.innerHTML = `
+        <div class="meta">${escapeHtml(meta.from)} 发送了文件</div>
+        <div class="file-info">
+          <div class="file-icon">📄</div>
+          <div>
+            <div>${escapeHtml(name)}</div>
+            <div style="font-size:0.8rem;color:var(--muted)">${formatSize(size)}</div>
+          </div>
+        </div>
+        <div class="progress"><div class="progress-bar" id="rxbar-${fileId}" style="width:0%"></div></div>
+      `;
+      chatArea.appendChild(div);
+      chatArea.scrollTop = chatArea.scrollHeight;
+    }
+
+    function receiveChunk(fileId, index, data, fromId) {
+      const info = incoming.get(fileId);
+      if (!info) return;
+      if (info.chunks.has(index)) return; // 去重
+
+      info.chunks.set(index, data);
+      info.received++;
+
+      const pct = Math.round((info.received / info.totalChunks) * 100);
+      const bar = document.getElementById(`rxbar-${fileId}`);
+      if (bar) bar.style.width = pct + '%';
+
+      if (info.received >= info.totalChunks) {
+        finalizeFile(fileId, fromId);
+      }
+    }
+
+    async function finalizeFile(fileId, fromId) {
+      const info = incoming.get(fileId);
+      if (!info || info.done) return;
+      info.done = true;
+
+      // 按顺序拼接
+      const parts = [];
+      for (let i = 0; i < info.totalChunks; i++) {
+        const chunk = info.chunks.get(i);
+        if (!chunk) {
+          addSystem(`文件 ${info.name} 缺少分块 ${i}，接收失败`);
+          return;
+        }
+        parts.push(chunk);
+      }
+      const blob = new Blob(parts, { type: 'application/octet-stream' });
+
+      // 校验（如果有 hash）
+      if (info.hash) {
+        const buf = await blob.arrayBuffer();
+        const hash = await sha256(buf);
+        if (hash !== info.hash) {
+          addSystem(`文件 ${info.name} 校验失败，可能损坏`);
+          return;
+        }
+      }
+
+      // 触发下载
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = info.name;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      const el = document.getElementById(`rx-${fileId}`);
+      if (el) {
+        el.querySelector('.progress').remove();
+        const done = document.createElement('div');
+        done.style.cssText = 'margin-top:6px;color:var(--success);font-size:0.85rem';
+        done.textContent = '✅ 已保存到下载文件夹';
+        el.appendChild(done);
+      }
+      addSystem(`已接收文件: ${info.name}`);
+      incoming.delete(fileId);
+    }
+
+    function formatSize(bytes) {
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';
+      if (bytes < 1024*1024*1024) return (bytes/1024/1024).toFixed(1) + ' MB';
+      return (bytes/1024/1024/1024).toFixed(2) + ' GB';
+    }
+
+    // ==================== 事件绑定 ====================
+    createBtn.onclick = createRoom;
+    joinBtn.onclick = joinRoom;
+    leaveBtn.onclick = leaveRoom;
+    sendBtn.onclick = sendMessage;
+
+    msgInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+
+    msgInput.addEventListener('input', () => {
+      msgInput.style.height = 'auto';
+      msgInput.style.height = Math.min(msgInput.scrollHeight, 120) + 'px';
+    });
+
+    $('copyRoomBtn').onclick = () => {
+      navigator.clipboard.writeText(roomId).then(() => toast('房间码已复制'));
+    };
+
+    dropZone.onclick = () => fileInput.click();
+    fileInput.onchange = () => handleFiles(fileInput.files);
+
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('dragover');
+    });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+      handleFiles(e.dataTransfer.files);
+    });
+
+    // 移动端侧边栏
+    if (window.innerWidth <= 800) {
+      $('toggleSidebar').style.display = 'inline-block';
+      $('toggleSidebar').onclick = () => $('sidebar').classList.toggle('show');
+    }
+
+    // 初始化提示
+    log('就绪 · 点击「创建房间」或输入房间码加入');
+  </script>
+</body>
+</html>
