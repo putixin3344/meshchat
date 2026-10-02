@@ -336,9 +336,31 @@
       secure: true,
       config: {
         iceServers: [
+          // STUN servers
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun.cloudflare.com:3478' }
+          { urls: 'stun:stun.cloudflare.com:3478' },
+          // Free public TURN servers (Open Relay Project)
+          {
+            urls: 'turn:openrelay.metered.ca:80',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          },
+          {
+            urls: 'turn:openrelay.metered.ca:443',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          },
+          {
+            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          },
+          {
+            urls: 'turn:openrelay.metered.ca:80?transport=tcp',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          }
         ]
       },
       debug: 1
@@ -704,6 +726,7 @@
       transferEl.innerHTML = `
         <div style="margin-bottom:4px">发送: ${escapeHtml(file.name)} (${formatSize(file.size)})</div>
         <div class="progress"><div class="progress-bar" id="bar-${fileId}" style="width:0%"></div></div>
+        <div id="pct-${fileId}" style="font-size:0.8rem;color:var(--muted);margin-top:2px">0%</div>
       `;
       transferList.prepend(transferEl);
 
@@ -739,16 +762,20 @@
         sentChunks++;
         const pct = Math.round((sentChunks / totalChunks) * 100);
         const bar = document.getElementById(`bar-${fileId}`);
+        const pctEl = document.getElementById(`pct-${fileId}`);
         if (bar) bar.style.width = pct + '%';
+        if (pctEl) pctEl.textContent = pct + '%';
       }
 
       // 通知完成
       broadcast({ type: 'file-done', fileId, hash: fileHash });
       addSystem(`文件已发送: ${file.name}`);
+      const pctEl = document.getElementById(`pct-${fileId}`);
+      if (pctEl) pctEl.textContent = '100% ✅ 发送完成';
       setTimeout(() => {
         const el = document.getElementById(`tx-${fileId}`);
         if (el) el.remove();
-      }, 3000);
+      }, 4000);
     }
 
     function handleBinary(raw, fromId) {
@@ -801,6 +828,7 @@
           </div>
         </div>
         <div class="progress"><div class="progress-bar" id="rxbar-${fileId}" style="width:0%"></div></div>
+        <div id="rxpct-${fileId}" style="font-size:0.8rem;color:var(--muted);margin-top:4px">0%</div>
       `;
       chatArea.appendChild(div);
       chatArea.scrollTop = chatArea.scrollHeight;
@@ -816,7 +844,9 @@
 
       const pct = Math.round((info.received / info.totalChunks) * 100);
       const bar = document.getElementById(`rxbar-${fileId}`);
+      const pctEl = document.getElementById(`rxpct-${fileId}`);
       if (bar) bar.style.width = pct + '%';
+      if (pctEl) pctEl.textContent = pct + '%';
 
       if (info.received >= info.totalChunks) {
         finalizeFile(fileId, fromId);
@@ -860,7 +890,10 @@
 
       const el = document.getElementById(`rx-${fileId}`);
       if (el) {
-        el.querySelector('.progress').remove();
+        const progress = el.querySelector('.progress');
+        if (progress) progress.remove();
+        const pctEl = document.getElementById(`rxpct-${fileId}`);
+        if (pctEl) pctEl.remove();
         const done = document.createElement('div');
         done.style.cssText = 'margin-top:6px;color:var(--success);font-size:0.85rem';
         done.textContent = '✅ 已保存到下载文件夹';
