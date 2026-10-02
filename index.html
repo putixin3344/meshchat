@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Mesh 加密聊天 & 文件传输 v1.3.0</title>
+  <title>Mesh 加密聊天 & 文件传输 v1.4.0</title>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <style>
     :root {
@@ -264,7 +264,7 @@
     <h1>
       <span>🔐 Mesh 加密聊天</span>
       <span class="badge" id="statusBadge">未连接</span>
-      <span class="badge" style="background:rgba(59,130,246,0.2);color:#93c5fd">v1.3.0</span>
+      <span class="badge" style="background:rgba(59,130,246,0.2);color:#93c5fd">v1.4.0</span>
     </h1>
     <div class="btn-row">
       <button class="secondary" id="toggleSidebar" style="display:none">菜单</button>
@@ -441,6 +441,11 @@
       return Math.random().toString(36).substring(2, 8).toUpperCase();
     }
 
+    // 将短房间码转换为更稳定的 Peer ID（减少冲突）
+    function roomToPeerId(code) {
+      return 'MESH' + code;
+    }
+
     async function sha256(buffer) {
       const hash = await crypto.subtle.digest('SHA-256', buffer);
       return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2,'0')).join('');
@@ -590,7 +595,8 @@
       setButtonsDisabled(true);
       roomId = generateRoomId();
       isHost = true;
-      startPeer(roomId); // 用房间码作为 host peer id，方便加入
+      // 使用加前缀的 Peer ID，提高注册成功率
+      startPeer(roomToPeerId(roomId));
     }
 
     function joinRoom() {
@@ -630,16 +636,17 @@
         setConnected(false);
 
         if (!isHost && roomId) {
-          // 作为客户端，连接 host（房间码就是 host 的 peer id）
-          log(`正在连接房间 ${roomId}...`);
-          connectToPeerWithRetry(roomId, 3);
+          // 作为客户端，连接 host（使用加前缀的 Peer ID）
+          const hostPeerId = roomToPeerId(roomId);
+          log(`正在连接房间 ${roomId}（目标ID: ${hostPeerId}）...`);
+          connectToPeerWithRetry(hostPeerId, 5);
         } else {
           // Host 等待别人连接
           setConnected(true);
           setButtonsDisabled(false);
           addSystem(`房间已创建，房间码：${roomId}`);
           addSystem(`请保持此页面打开，把房间码发给对方`);
-          log(`房间 ${roomId} 已就绪，等待其他人加入（请勿刷新或关闭）`);
+          log(`房间 ${roomId} 已就绪（PeerID: ${id}），等待加入`);
         }
       });
 
@@ -692,7 +699,7 @@
         }
 
         attempts++;
-        log(`正在连接房间 ${targetId}... (第 ${attempts}/${maxRetries} 次)`);
+        log(`正在连接 ${targetId}... (第 ${attempts}/${maxRetries} 次)`);
         
         if (!peer || peer.destroyed) {
           setButtonsDisabled(false);
@@ -704,8 +711,8 @@
           return;
         }
 
-        // 再次确认当前仍是加入模式，且 roomId 匹配
-        if (isHost || roomId !== targetId) {
+        // 再次确认当前仍是加入模式，且目标仍是当前房间
+        if (isHost || roomToPeerId(roomId) !== targetId) {
           console.log('已切换为创建者或房间码已变更，停止重试');
           setButtonsDisabled(false);
           return;
