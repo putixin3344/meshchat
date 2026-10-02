@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Mesh 加密聊天 & 文件传输 v1.1.0</title>
+  <title>Mesh 加密聊天 & 文件传输 v1.2.0</title>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <style>
     :root {
@@ -264,7 +264,7 @@
     <h1>
       <span>🔐 Mesh 加密聊天</span>
       <span class="badge" id="statusBadge">未连接</span>
-      <span class="badge" style="background:rgba(59,130,246,0.2);color:#93c5fd">v1.1.0</span>
+      <span class="badge" style="background:rgba(59,130,246,0.2);color:#93c5fd">v1.2.0</span>
     </h1>
     <div class="btn-row">
       <button class="secondary" id="toggleSidebar" style="display:none">菜单</button>
@@ -375,6 +375,7 @@
     const connections = new Map(); // peerId -> DataConnection
     const peerNames = new Map();   // peerId -> display name
     let myName = '用户' + Math.floor(Math.random() * 9000 + 1000);
+    let retryToken = 0; // 用于取消过期的重试任务
 
     // 文件传输状态
     const outgoing = new Map(); // fileId -> {file, chunks, sent, peers}
@@ -604,6 +605,9 @@
     }
 
     function startPeer(forcedId = null) {
+      // 取消所有进行中的重试任务
+      retryToken++;
+
       if (peer) {
         peer.destroy();
         peer = null;
@@ -672,15 +676,34 @@
       });
     }
 
-    // 带重试的连接函数
+    // 带重试的连接函数（可被取消）
     function connectToPeerWithRetry(targetId, maxRetries = 3) {
+      const currentToken = retryToken; // 捕获当前令牌
       let attempts = 0;
 
       function tryConnect() {
+        // 如果令牌已变化（用户创建了新房间或离开），立即停止
+        if (currentToken !== retryToken) {
+          console.log('重试已取消（房间状态已变更）');
+          return;
+        }
+
         attempts++;
         log(`正在连接 ${targetId.slice(0,8)}... (第 ${attempts}/${maxRetries} 次)`);
         
+        if (!peer || peer.destroyed) {
+          setButtonsDisabled(false);
+          return;
+        }
+
         if (connections.has(targetId)) {
+          setButtonsDisabled(false);
+          return;
+        }
+
+        // 再次确认当前仍是加入模式，且 roomId 匹配
+        if (isHost || roomId !== targetId) {
+          console.log('已切换为创建者或房间码已变更，停止重试');
           setButtonsDisabled(false);
           return;
         }
@@ -688,6 +711,7 @@
         const conn = peer.connect(targetId, { reliable: true, serialization: 'json' });
         
         const timeout = setTimeout(() => {
+          if (currentToken !== retryToken) return; // 已取消
           if (!conn.open) {
             try { conn.close(); } catch(e) {}
             if (attempts < maxRetries) {
@@ -702,12 +726,17 @@
         }, 6000);
 
         conn.on('open', () => {
+          if (currentToken !== retryToken) {
+            try { conn.close(); } catch(e) {}
+            return;
+          }
           clearTimeout(timeout);
           setupConnection(conn);
           setButtonsDisabled(false);
         });
 
         conn.on('error', (err) => {
+          if (currentToken !== retryToken) return;
           clearTimeout(timeout);
           console.warn('连接错误', err);
           if (attempts < maxRetries) {
@@ -723,6 +752,7 @@
     }
 
     function leaveRoom() {
+      retryToken++; // 取消所有重试
       for (const conn of connections.values()) {
         try { conn.close(); } catch {}
       }
